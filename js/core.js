@@ -4,6 +4,7 @@
   const LEARNED_LEVEL = 3;
   const MAX_LEVEL = 5;
   const REQUEUE_GAP = 3;
+  const MIX_TYPES = ['choice', 'write', 'tf'];
   const SEPARATORS = [/\t+/, /\s+[-–—=:]\s+/, /[–—=]/];
 
   function uid() {
@@ -204,6 +205,9 @@
   }
 
   function currentType(session) {
+    if (session.mode === 'mix') {
+      return MIX_TYPES[Math.floor(Math.random() * MIX_TYPES.length)];
+    }
     return stagesFor(session.mode)[session.queue[0].stage];
   }
 

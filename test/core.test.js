@@ -125,3 +125,18 @@ test('rankVoices keeps English voices and puts natural ones before robotic', () 
     'Fred',
   ]);
 });
+
+test('mix session asks random quiz types and finishes each card after one correct answer', () => {
+  const cards = Array.from({ length: 30 }, (_, i) => ({ id: String(i), en: `w${i}`, ru: `с${i}`, level: 0 }));
+  const session = C.createSession(cards, 'mix');
+  const types = new Set();
+
+  while (session.queue.length) {
+    types.add(C.currentType(session));
+    C.submit(session, true);
+  }
+
+  assert.deepStrictEqual([...types].sort(), ['choice', 'tf', 'write']);
+  assert.strictEqual(session.finished, 30);
+  assert.strictEqual(C.sessionProgress(session), 1);
+});
