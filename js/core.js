@@ -1,0 +1,259 @@
+(function (root) {
+  'use strict';
+
+  const LEARNED_LEVEL = 3;
+  const MAX_LEVEL = 5;
+  const REQUEUE_GAP = 3;
+  const SEPARATORS = [/\t+/, /\s+[-–—=:]\s+/, /[–—=]/];
+
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function shuffle(items) {
+    const result = items.slice();
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+
+  function parseCards(text) {
+    const cards = [];
+    const errors = [];
+
+    text.split(/\r?\n/).forEach((raw, index) => {
+      const line = raw.trim();
+      if (!line) {
+        return;
+      }
+
+      for (const separator of SEPARATORS) {
+        const match = line.match(separator);
+        if (!match) {
+          continue;
+        }
+
+        const en = line.slice(0, match.index).trim();
+        const ru = line.slice(match.index + match[0].length).trim();
+        if (en && ru) {
+          cards.push({ en, ru });
+          return;
+        }
+      }
+
+      errors.push({ line: index + 1, text: line });
+    });
+
+    return { cards, errors };
+  }
+
+  function serializeCards(cards) {
+    return cards.map(card => `${card.en} — ${card.ru}`).join('\n');
+  }
+
+  function mergeCards(oldCards, parsed) {
+    const byEn = new Map(oldCards.map(card => [card.en.toLowerCase(), card]));
+
+    return parsed.map(pair => {
+      const key = pair.en.toLowerCase();
+      const old = byEn.get(key);
+      if (!old) {
+        return { id: uid(), en: pair.en, ru: pair.ru, level: 0 };
+      }
+
+      byEn.delete(key);
+      return { ...old, en: pair.en, ru: pair.ru };
+    });
+  }
+
+  function normalize(text) {
+    return text
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/[’`]/g, "'")
+      .replace(/[^\p{L}\p{N}' ]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function stripArticles(text) {
+    return text.replace(/^(to|a|an|the) /, '');
+  }
+
+  function answerVariants(expected) {
+    const withoutParens = expected.replace(/\([^)]*\)/g, ' ');
+    const raw = [expected, withoutParens, ...withoutParens.split(/[,;/]/)];
+    const variants = new Set();
+
+    raw.forEach(item => {
+      const variant = stripArticles(normalize(item));
+      if (variant) {
+        variants.add(variant);
+      }
+    });
+
+    return [...variants];
+  }
+
+  function levenshtein(a, b) {
+    let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+
+    for (let i = 1; i <= a.length; i++) {
+      const current = [i];
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        current.push(Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost));
+      }
+      previous = current;
+    }
+
+    return previous[b.length];
+  }
+
+  function typoLimit(length) {
+    if (length >= 10) {
+      return 2;
+    }
+    return length >= 6 ? 1 : 0;
+  }
+
+  function checkAnswer(input, expected) {
+    const answer = stripArticles(normalize(input));
+    if (!answer) {
+      return 'wrong';
+    }
+
+    const variants = answerVariants(expected);
+    if (variants.includes(answer)) {
+      return 'correct';
+    }
+
+    const isTypo = variants.some(variant => levenshtein(answer, variant) <= typoLimit(variant.length));
+    return isTypo ? 'typo' : 'wrong';
+  }
+
+  function grade(card, ok) {
+    const level = card.level || 0;
+    card.level = ok ? Math.min(MAX_LEVEL, level + 1) : Math.max(0, level - 2);
+  }
+
+  function isLearned(card) {
+    return (card.level || 0) >= LEARNED_LEVEL;
+  }
+
+  function resolveDirection(direction) {
+    if (direction !== 'mix') {
+      return direction;
+    }
+    return Math.random() < 0.5 ? 'en-ru' : 'ru-en';
+  }
+
+  function sides(card, direction) {
+    const dir = resolveDirection(direction);
+    if (dir === 'en-ru') {
+      return { dir, prompt: card.en, answer: card.ru, promptLang: 'en', answerLang: 'ru' };
+    }
+    return { dir, prompt: card.ru, answer: card.en, promptLang: 'ru', answerLang: 'en' };
+  }
+
+  function answerOf(card, dir) {
+    return dir === 'en-ru' ? card.ru : card.en;
+  }
+
+  function buildQuestion(card, type, pool, direction) {
+    const question = { card, type, ...sides(card, direction) };
+    const others = shuffle(pool.filter(other => other.id !== card.id));
+    const isSameAnswer = text => normalize(text) === normalize(question.answer);
+
+    if (type === 'choice') {
+      const options = [question.answer];
+      for (const other of others) {
+        if (options.length >= 4) {
+          break;
+        }
+        const option = answerOf(other, question.dir);
+        if (!options.some(existing => normalize(existing) === normalize(option))) {
+          options.push(option);
+        }
+      }
+      question.options = shuffle(options);
+    }
+
+    if (type === 'tf') {
+      const wrong = others.map(other => answerOf(other, question.dir)).find(text => !isSameAnswer(text));
+      question.isTrue = !wrong || Math.random() < 0.5;
+      question.shown = question.isTrue ? question.answer : wrong;
+    }
+
+    return question;
+  }
+
+  function stagesFor(mode) {
+    return mode === 'learn' ? ['choice', 'write'] : [mode];
+  }
+
+  function createSession(cards, mode) {
+    const items = shuffle(cards).map(card => ({
+      card,
+      stage: mode === 'learn' && (card.level || 0) >= 2 ? 1 : 0,
+      misses: 0,
+    }));
+    return { mode, items, queue: items.slice(), total: items.length, finished: 0 };
+  }
+
+  function currentType(session) {
+    return stagesFor(session.mode)[session.queue[0].stage];
+  }
+
+  function submit(session, ok) {
+    const item = session.queue.shift();
+
+    if (!ok) {
+      item.misses++;
+      session.queue.splice(Math.min(REQUEUE_GAP, session.queue.length), 0, item);
+      return;
+    }
+
+    item.stage++;
+    if (item.stage >= stagesFor(session.mode).length) {
+      session.finished++;
+      return;
+    }
+    session.queue.push(item);
+  }
+
+  function sessionProgress(session) {
+    if (!session.total) {
+      return 1;
+    }
+    const done = session.items.reduce((sum, item) => sum + item.stage, 0);
+    return done / (session.total * stagesFor(session.mode).length);
+  }
+
+  const Core = {
+    MAX_LEVEL,
+    uid,
+    shuffle,
+    parseCards,
+    serializeCards,
+    mergeCards,
+    normalize,
+    checkAnswer,
+    grade,
+    isLearned,
+    sides,
+    buildQuestion,
+    createSession,
+    currentType,
+    submit,
+    sessionProgress,
+  };
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = Core;
+  } else {
+    root.Core = Core;
+  }
+})(this);
