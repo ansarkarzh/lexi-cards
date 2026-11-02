@@ -416,17 +416,65 @@
     return { title: title.trim(), cards: C.parseCards(lines.join('\n')).cards };
   }
 
+  // Native confirm/prompt are silently blocked in many in-app mobile browsers, so dialogs are drawn in the page.
+  function showDialog({ text, okLabel, cancelLabel = 'Отмена', danger = false, link = '' }) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay';
+      overlay.innerHTML = `
+        <div class="dialog" role="dialog" aria-modal="true">
+          <p>${esc(text)}</p>
+          ${link ? `<input class="dialog-link" readonly value="${esc(link)}">` : ''}
+          <div class="actions">
+            ${cancelLabel ? `<button class="btn" type="button" data-result="no">${cancelLabel}</button>` : ''}
+            <button class="btn ${danger ? 'danger-solid' : 'primary'}" type="button" data-result="yes">${okLabel}</button>
+          </div>
+        </div>`;
+
+      const previousKeyHandler = keyHandler;
+      const close = result => {
+        overlay.remove();
+        keyHandler = previousKeyHandler;
+        resolve(result);
+      };
+
+      overlay.addEventListener('click', event => {
+        const button = event.target.closest('[data-result]');
+        if (button) {
+          close(button.dataset.result === 'yes');
+        } else if (event.target === overlay) {
+          close(false);
+        }
+      });
+      keyHandler = event => {
+        if (event.key === 'Escape') {
+          close(false);
+        }
+      };
+
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector('.dialog-link');
+      if (input) {
+        input.focus();
+        input.select();
+      } else {
+        overlay.querySelector('[data-result="yes"]').focus();
+      }
+    });
+  }
+
   async function share(set) {
     const url = `${location.origin}${location.pathname}#/import/${encodeShare(set)}`;
     try {
       await navigator.clipboard.writeText(url);
       toast('Ссылка на набор скопирована');
     } catch (e) {
-      prompt('Скопируйте ссылку на набор:', url);
+      await showDialog({ text: 'Скопируйте ссылку на набор:', link: url, okLabel: 'Готово', cancelLabel: '' });
     }
   }
 
   function route() {
+    document.querySelectorAll('.overlay').forEach(overlay => overlay.remove());
     clearTimers();
     keyHandler = null;
     if (CAN_SPEAK) {
@@ -566,7 +614,8 @@
     bind('#logout', async () => {
       await flush();
       const unsynced = Object.keys(store.dirty).length || store.deleted.length;
-      if (unsynced && !confirm('Часть изменений ещё не отправлена в облако и пропадёт. Всё равно выйти?')) {
+      const text = 'Часть изменений ещё не отправлена в облако и пропадёт. Всё равно выйти?';
+      if (unsynced && !(await showDialog({ text, okLabel: 'Выйти', danger: true }))) {
         return;
       }
       await Cloud.signOut();
@@ -641,8 +690,8 @@
     bind('#voice-test', () => speak(set.cards[0].en, 'en'));
 
     bind('#share', () => share(set));
-    bind('#reset', () => {
-      if (!confirm('Сбросить прогресс по всем словам набора?')) {
+    bind('#reset', async () => {
+      if (!(await showDialog({ text: 'Сбросить прогресс по всем словам набора?', okLabel: 'Сбросить', danger: true }))) {
         return;
       }
       set.cards.forEach(card => { card.level = 0; });
@@ -650,8 +699,8 @@
       touch(set);
       renderSet(set);
     });
-    bind('#delete', () => {
-      if (!confirm(`Удалить набор «${set.title}»?`)) {
+    bind('#delete', async () => {
+      if (!(await showDialog({ text: `Удалить набор «${set.title}»?`, okLabel: 'Удалить', danger: true }))) {
         return;
       }
       removeSet(set);
@@ -691,10 +740,11 @@
       $('#edit-title').focus();
     }
 
-    $('#edit-form').onsubmit = event => {
+    $('#edit-form').onsubmit = async event => {
       event.preventDefault();
       const { cards, errors } = C.parseCards(textarea.value);
-      if (errors.length && !confirm(`Строки без перевода (${errors.length}) будут пропущены. Сохранить?`)) {
+      const text = `Строки без перевода (${errors.length}) будут пропущены. Сохранить?`;
+      if (errors.length && !(await showDialog({ text, okLabel: 'Сохранить' }))) {
         return;
       }
 
