@@ -104,3 +104,24 @@ test('learn session requires choice then write and requeues mistakes', () => {
   assert.strictEqual(C.sessionProgress(session), 1);
   assert.strictEqual(session.items.filter(item => item.misses).length, 1);
 });
+
+test('rankVoices keeps English voices and puts natural ones before robotic', () => {
+  const voices = [
+    { name: 'Milena', lang: 'ru-RU' },
+    { name: 'Fred', lang: 'en-US' },
+    { name: 'Eddy (English (US))', lang: 'en-US' },
+    { name: 'Samantha', lang: 'en-US' },
+    { name: 'Google UK English Female', lang: 'en-GB' },
+    { name: 'Microsoft Aria Online (Natural) - English (United States)', lang: 'en-US' },
+    { name: 'Ava (Premium)', lang: 'en_US' },
+  ];
+
+  assert.deepStrictEqual(C.rankVoices(voices).map(voice => voice.name), [
+    'Ava (Premium)',
+    'Microsoft Aria Online (Natural) - English (United States)',
+    'Google UK English Female',
+    'Samantha',
+    'Eddy (English (US))',
+    'Fred',
+  ]);
+});

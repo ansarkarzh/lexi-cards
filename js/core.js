@@ -232,8 +232,56 @@
     return done / (session.total * stagesFor(session.mode).length);
   }
 
+  const NOVELTY_VOICES = /^(albert|bad news|bahh|bells|boing|bubbles|cellos|deranged|fred|good news|hysterical|jester|junior|kathy|organ|pipe organ|princess|ralph|superstar|trinoids|whisper|wobble|zarvox)\b/i;
+  const ELOQUENCE_VOICES = /^(eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley)\b/i;
+  const GOOD_SYSTEM_VOICES = /^(samantha|daniel|karen|moira|ava|allison|susan|serena|tom|alex)\b/i;
+
+  function voiceScore(voice) {
+    const name = voice.name;
+    const lang = voice.lang.replace('_', '-').toLowerCase();
+    let score = 0;
+
+    if (/natural|neural/i.test(name)) {
+      score += 50;
+    }
+    if (/premium/i.test(name)) {
+      score += 40;
+    }
+    if (/enhanced/i.test(name)) {
+      score += 35;
+    }
+    if (/^google/i.test(name)) {
+      score += 30;
+    }
+    if (GOOD_SYSTEM_VOICES.test(name)) {
+      score += 15;
+    }
+    if (NOVELTY_VOICES.test(name)) {
+      score -= 100;
+    }
+    if (ELOQUENCE_VOICES.test(name)) {
+      score -= 30;
+    }
+    if (lang === 'en-us') {
+      score += 5;
+    } else if (lang === 'en-gb') {
+      score += 4;
+    }
+
+    return score;
+  }
+
+  function rankVoices(voices) {
+    return voices
+      .filter(voice => /^en([-_]|$)/i.test(voice.lang))
+      .map(voice => ({ voice, score: voiceScore(voice) }))
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.voice);
+  }
+
   const Core = {
     MAX_LEVEL,
+    rankVoices,
     uid,
     shuffle,
     parseCards,

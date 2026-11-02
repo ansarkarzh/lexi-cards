@@ -2,10 +2,14 @@
   'use strict';
 
   const C = window.Core;
+  const Cloud = window.LexiCloud || { enabled: false };
   const STORAGE_KEY = 'lexi.v1';
-  const DEFAULT_SETTINGS = { direction: 'en-ru', autoSpeak: false, onlyUnlearned: false };
+  const DEFAULT_SETTINGS = { direction: 'en-ru', autoSpeak: false, onlyUnlearned: false, voice: '' };
   const CAN_SPEAK = 'speechSynthesis' in window;
   const MATCH_SIZE = 6;
+  const SYNC_DELAY_MS = 1500;
+  const SYNC_RETRY_MS = 15000;
+  const REFRESHABLE_VIEWS = ['', 'set', 'account'];
 
   const MODES = [
     { id: 'cards', icon: '🃏', title: 'Карточки', desc: 'Переворачивайте и отмечайте, что знаете' },
@@ -23,9 +27,16 @@
   ];
 
   const app = document.getElementById('app');
+  const footer = document.getElementById('footer');
   const store = load();
   let keyHandler = null;
   let timers = [];
+  let voices = [];
+  let user = null;
+  let syncTimer = null;
+  let syncing = false;
+  let syncAgain = false;
+  let syncStatus = 'idle';
 
   function load() {
     let data = null;
@@ -39,11 +50,189 @@
       data = { sets: [] };
     }
     data.settings = { ...DEFAULT_SETTINGS, ...data.settings };
+    data.owner = data.owner || null;
+    data.dirty = data.dirty || {};
+    data.deleted = data.deleted || [];
     return data;
   }
 
   function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  }
+
+  function touch(set) {
+    store.dirty[set.id] = (store.dirty[set.id] || 0) + 1;
+    save();
+    scheduleSync(SYNC_DELAY_MS);
+  }
+
+  function removeSet(set) {
+    store.sets = store.sets.filter(other => other !== set);
+    delete store.dirty[set.id];
+    if (store.owner) {
+      store.deleted.push(set.id);
+    }
+    save();
+    scheduleSync(SYNC_DELAY_MS);
+  }
+
+  function clearLocalSets() {
+    store.sets = [];
+    store.dirty = {};
+    store.deleted = [];
+    store.owner = null;
+    save();
+  }
+
+  function setSyncStatus(status) {
+    syncStatus = status;
+    renderFooter();
+  }
+
+  function scheduleSync(delay) {
+    if (!user) {
+      return;
+    }
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(flush, delay);
+  }
+
+  async function flush() {
+    clearTimeout(syncTimer);
+    if (!user) {
+      return;
+    }
+    if (syncing) {
+      syncAgain = true;
+      return;
+    }
+
+    const dirty = { ...store.dirty };
+    const deleted = store.deleted.slice();
+    const changed = store.sets.filter(set => dirty[set.id]);
+    if (!changed.length && !deleted.length) {
+      return;
+    }
+
+    syncing = true;
+    setSyncStatus('syncing');
+    try {
+      if (changed.length) {
+        await Cloud.upsertSets(changed);
+      }
+      if (deleted.length) {
+        await Cloud.deleteSets(deleted);
+      }
+
+      Object.keys(dirty).forEach(id => {
+        if (store.dirty[id] === dirty[id]) {
+          delete store.dirty[id];
+        }
+      });
+      store.deleted = store.deleted.filter(id => !deleted.includes(id));
+      save();
+      setSyncStatus('ok');
+    } catch (e) {
+      console.error('Sync failed', e);
+      setSyncStatus('error');
+      scheduleSync(SYNC_RETRY_MS);
+    } finally {
+      syncing = false;
+    }
+
+    if (syncAgain) {
+      syncAgain = false;
+      await flush();
+    }
+  }
+
+  async function pull() {
+    try {
+      const remote = await Cloud.fetchSets();
+      const local = new Map(store.sets.map(set => [set.id, set]));
+      const remoteIds = new Set(remote.map(set => set.id));
+
+      const merged = remote
+        .filter(set => !store.deleted.includes(set.id))
+        .map(set => (store.dirty[set.id] && local.get(set.id)) || set);
+      const unsynced = store.sets.filter(set => store.dirty[set.id] && !remoteIds.has(set.id));
+
+      store.sets = merged.concat(unsynced);
+      save();
+      if (syncStatus !== 'error') {
+        setSyncStatus('ok');
+      }
+    } catch (e) {
+      console.error('Pull failed', e);
+      setSyncStatus('error');
+    }
+  }
+
+  async function handleUser(next) {
+    const previous = user;
+    user = next;
+
+    if (!user) {
+      if (store.owner) {
+        clearLocalSets();
+      }
+      setSyncStatus('idle');
+      if (previous) {
+        location.hash = '#/';
+      }
+      refreshView();
+      return;
+    }
+
+    if (previous && previous.id === user.id) {
+      return;
+    }
+
+    if (store.owner !== user.id) {
+      if (store.owner) {
+        clearLocalSets();
+      }
+      store.sets.forEach(set => {
+        store.dirty[set.id] = 1;
+      });
+      store.owner = user.id;
+      save();
+    }
+
+    if (location.hash.startsWith('#/login')) {
+      location.hash = '#/';
+    }
+
+    setSyncStatus('syncing');
+    await flush();
+    await pull();
+    refreshView();
+  }
+
+  function refreshView() {
+    const view = location.hash.replace(/^#\/?/, '').split('/')[0];
+    if (REFRESHABLE_VIEWS.includes(view)) {
+      route();
+    }
+  }
+
+  function renderFooter() {
+    if (!Cloud.enabled) {
+      footer.textContent = 'Наборы и прогресс хранятся только в этом браузере';
+      return;
+    }
+    if (!user) {
+      footer.innerHTML = 'Наборы хранятся в этом браузере. <a href="#/login">Войдите</a>, чтобы синхронизировать их между устройствами';
+      return;
+    }
+
+    const texts = {
+      idle: '☁ Синхронизация включена',
+      syncing: '☁ Синхронизация…',
+      ok: '☁ Всё сохранено в облаке',
+      error: '⚠ Нет связи с сервером — изменения сохранены в браузере и отправятся позже',
+    };
+    footer.textContent = texts[syncStatus];
   }
 
   function makeSet(title, pairs) {
@@ -118,7 +307,34 @@
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = lang === 'ru' ? 'ru-RU' : 'en-US';
     utterance.rate = 0.9;
+
+    const voice = lang === 'ru' ? null : currentVoice();
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
+    }
     speechSynthesis.speak(utterance);
+  }
+
+  function loadVoices() {
+    voices = C.rankVoices(speechSynthesis.getVoices());
+    const select = $('#opt-voice');
+    if (select) {
+      select.innerHTML = voiceOptionsHtml();
+    }
+  }
+
+  function currentVoice() {
+    return voices.find(voice => voice.voiceURI === store.settings.voice) || voices[0] || null;
+  }
+
+  function voiceOptionsHtml() {
+    if (!voices.length) {
+      return '<option value="">Голос по умолчанию</option>';
+    }
+    const selected = currentVoice();
+    return voices.map(voice =>
+      `<option value="${esc(voice.voiceURI)}"${voice === selected ? ' selected' : ''}>${esc(voice.name)} (${esc(voice.lang)})</option>`).join('');
   }
 
   function speakButton(text, lang) {
@@ -196,6 +412,10 @@
       renderStudy(set, mode);
     } else if (view === 'import' && id) {
       renderImport(id);
+    } else if (view === 'login' && Cloud.enabled && !user) {
+      renderLogin();
+    } else if (view === 'account' && user) {
+      renderAccount();
     } else {
       renderHome();
     }
@@ -222,12 +442,82 @@
         <a class="btn primary" href="#/new">Создать первый набор</a>
       </div>`;
 
+    let account = '';
+    if (user) {
+      account = `<a class="btn" href="#/account" title="${esc(user.email || '')}">☁ Аккаунт</a>`;
+    } else if (Cloud.enabled) {
+      account = '<a class="btn" href="#/login">Войти</a>';
+    }
+
     app.innerHTML = `
       <header class="top">
         <h1>🃏 Lexi</h1>
-        <a class="btn primary" href="#/new">+ Новый набор</a>
+        <div class="top-actions">
+          ${account}
+          <a class="btn primary" href="#/new">+ Новый набор</a>
+        </div>
       </header>
       ${tiles ? `<div class="grid">${tiles}</div>` : empty}`;
+  }
+
+  function renderLogin() {
+    app.innerHTML = `
+      <header class="top"><a class="back" href="#/">← Назад</a></header>
+      <h2>Вход</h2>
+      <p class="muted">Введите email — пришлём ссылку для входа, пароль не нужен. Наборы из этого браузера сохранятся в ваш аккаунт.</p>
+      <form id="login-form" class="edit">
+        <input id="login-email" type="email" required autocomplete="email" placeholder="you@example.com">
+        <div><button class="btn primary">Получить ссылку</button></div>
+        <div id="login-info"></div>
+      </form>`;
+
+    const input = $('#login-email');
+    const info = $('#login-info');
+    input.focus();
+
+    $('#login-form').onsubmit = async event => {
+      event.preventDefault();
+      const button = $('#login-form button');
+      button.disabled = true;
+      info.className = 'muted';
+      info.textContent = 'Отправляем…';
+      try {
+        await Cloud.signIn(input.value.trim());
+        info.className = 'good-text';
+        info.textContent = 'Готово! Откройте ссылку из письма в этом же браузере.';
+      } catch (e) {
+        info.className = 'bad-text';
+        info.textContent = `Не получилось отправить письмо: ${e.message || e}`;
+        button.disabled = false;
+      }
+    };
+  }
+
+  function renderAccount() {
+    app.innerHTML = `
+      <header class="top"><a class="back" href="#/">← Все наборы</a></header>
+      <h2>Аккаунт</h2>
+      <p>${esc(user.email || '')}</p>
+      <p class="muted">${esc(footer.textContent)}</p>
+      <div class="actions">
+        <button class="btn" id="sync-now">↻ Синхронизировать сейчас</button>
+        <button class="btn danger" id="logout">Выйти</button>
+      </div>
+      <p class="hint left">После выхода наборы удалятся из этого браузера, но останутся в аккаунте.</p>`;
+
+    bind('#sync-now', async () => {
+      await flush();
+      await pull();
+      route();
+    });
+    bind('#logout', async () => {
+      await flush();
+      const unsynced = Object.keys(store.dirty).length || store.deleted.length;
+      if (unsynced && !confirm('Часть изменений ещё не отправлена в облако и пропадёт. Всё равно выйти?')) {
+        return;
+      }
+      await Cloud.signOut();
+    });
   }
 
   function renderSet(set) {
@@ -251,7 +541,12 @@
         <label>Направление <select id="opt-dir">${directionOptions}</select></label>
         <label><input type="checkbox" id="opt-only"${settings.onlyUnlearned ? ' checked' : ''}> Только невыученные</label>
         ${CAN_SPEAK ? `<label><input type="checkbox" id="opt-speak"${settings.autoSpeak ? ' checked' : ''}> Озвучивать английский</label>` : ''}
-      </div>`;
+      </div>
+      ${CAN_SPEAK ? `
+      <div class="options-row">
+        <label>Голос <select id="opt-voice">${voiceOptionsHtml()}</select></label>
+        <button class="btn small" type="button" id="voice-test">▶ Прослушать</button>
+      </div>` : ''}`;
 
     app.innerHTML = `
       <header class="top"><a class="back" href="#/">← Все наборы</a></header>
@@ -281,6 +576,11 @@
     onChange('#opt-dir', el => { settings.direction = el.value; });
     onChange('#opt-only', el => { settings.onlyUnlearned = el.checked; });
     onChange('#opt-speak', el => { settings.autoSpeak = el.checked; });
+    onChange('#opt-voice', el => {
+      settings.voice = el.value;
+      speak(set.cards[0].en, 'en');
+    });
+    bind('#voice-test', () => speak(set.cards[0].en, 'en'));
 
     bind('#share', () => share(set));
     bind('#reset', () => {
@@ -289,15 +589,14 @@
       }
       set.cards.forEach(card => { card.level = 0; });
       delete set.bestMatch;
-      save();
+      touch(set);
       renderSet(set);
     });
     bind('#delete', () => {
       if (!confirm(`Удалить набор «${set.title}»?`)) {
         return;
       }
-      store.sets = store.sets.filter(other => other !== set);
-      save();
+      removeSet(set);
       location.hash = '#/';
     });
   }
@@ -350,7 +649,7 @@
         target = makeSet(title, cards);
         store.sets.push(target);
       }
-      save();
+      touch(target);
       location.hash = `#/set/${target.id}`;
     };
   }
@@ -382,7 +681,7 @@
     bind('#add', () => {
       const set = makeSet(shared.title || 'Без названия', shared.cards);
       store.sets.push(set);
-      save();
+      touch(set);
       location.hash = `#/set/${set.id}`;
     });
   }
@@ -471,7 +770,7 @@
       };
       const mark = ok => {
         C.grade(card, ok);
-        save();
+        touch(set);
         (ok ? known : learning).push(card);
         index++;
         show();
@@ -568,7 +867,7 @@
 
     function commit(question, ok) {
       C.grade(question.card, ok);
-      save();
+      touch(set);
       C.submit(session, ok);
     }
 
@@ -805,7 +1104,7 @@
       const isRecord = !best || time < best;
       if (isRecord) {
         set.bestMatch = time;
-        save();
+        touch(set);
       }
 
       ui.counter.textContent = `${time.toFixed(1)} с`;
@@ -836,6 +1135,29 @@
     }
   });
 
+  document.addEventListener('visibilitychange', async () => {
+    if (!user) {
+      return;
+    }
+    await flush();
+    if (document.visibilityState === 'visible') {
+      await pull();
+      refreshView();
+    }
+  });
+
+  window.addEventListener('online', () => flush());
   window.addEventListener('hashchange', route);
+
+  if (CAN_SPEAK) {
+    loadVoices();
+    speechSynthesis.onvoiceschanged = loadVoices;
+  }
+
+  renderFooter();
   route();
+
+  if (Cloud.enabled) {
+    Cloud.onAuthChange(handleUser);
+  }
 })();

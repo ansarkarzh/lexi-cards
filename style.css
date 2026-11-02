@@ -52,6 +52,8 @@ a { color: var(--accent); text-decoration: none; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; margin-bottom: 16px; }
 .top h1 { margin: 0; font-size: 28px; }
 .back { font-weight: 600; }
+.top-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.footer a { color: var(--accent); }
 
 .btn {
   display: inline-flex;
@@ -72,6 +74,8 @@ a { color: var(--accent); text-decoration: none; }
 .btn.good { background: var(--good-soft); border-color: var(--good); color: var(--good); }
 .btn.bad { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
 .btn.danger { color: var(--bad); }
+.btn.small { padding: 4px 10px; font-size: 14px; }
+.btn:disabled { opacity: 0.6; cursor: default; }
 .link { display: block; margin: 8px auto 0; padding: 8px; border: 0; background: none; color: var(--muted); font: inherit; text-decoration: underline; cursor: pointer; }
 .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 16px 0; }
 
@@ -99,7 +103,7 @@ a { color: var(--accent); text-decoration: none; }
 
 .empty { padding: 40px 0; color: var(--muted); text-align: center; }
 .options-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-bottom: 12px; font-size: 14px; }
-.options-row select { margin-left: 6px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.options-row select { max-width: 100%; margin-left: 6px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; }
 .actions .btn { padding: 8px 12px; font-size: 14px; }
 
