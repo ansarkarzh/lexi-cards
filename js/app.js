@@ -8,6 +8,7 @@
   const CAN_SPEAK = 'speechSynthesis' in window;
   const MATCH_SIZE = 6;
   const IMAGE_MAX_SIZE = 512;
+  const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
   const SYNC_DELAY_MS = 1500;
   const SYNC_RETRY_MS = 15000;
   const REFRESHABLE_VIEWS = ['', 'set', 'account'];
@@ -520,24 +521,52 @@
     return webp && webp.type === 'image/webp' ? webp : toBlob('image/jpeg');
   }
 
+  async function searchImages(query) {
+    const params = new URLSearchParams({
+      action: 'query',
+      format: 'json',
+      origin: '*',
+      generator: 'search',
+      gsrsearch: `${query} filetype:bitmap`,
+      gsrnamespace: '6',
+      gsrlimit: '12',
+      prop: 'imageinfo',
+      iiprop: 'url',
+      iiurlwidth: '400',
+    });
+    const response = await fetch(`${COMMONS_API}?${params}`);
+    if (!response.ok) {
+      throw new Error(`Wikimedia responded with ${response.status}`);
+    }
+
+    const data = await response.json();
+    const pages = Object.values((data.query && data.query.pages) || {}).sort((a, b) => a.index - b.index);
+    return pages.map(page => page.imageinfo && page.imageinfo[0].thumburl).filter(Boolean);
+  }
+
   function openImagePicker(set, card) {
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
 
-    const body = user ? `
+    let upload = '';
+    if (user) {
+      upload = '<label class="btn">📷 Загрузить своё<input type="file" accept="image/*" id="img-file" hidden></label>';
+    } else if (Cloud.enabled) {
+      upload = '<a class="btn" href="#/login">Войдите, чтобы загружать свои фото</a>';
+    }
+
+    const body = `
       <form class="write" id="img-search">
         <input id="img-query" value="${esc(card.en)}" autocomplete="off" autocapitalize="off" placeholder="Что искать, по-английски">
         <button class="btn primary">Найти</button>
       </form>
       <div class="img-grid" id="img-results"></div>
-      <p class="hint left">Фото: <a href="https://www.pexels.com" target="_blank" rel="noopener">Pexels</a></p>
+      <p class="hint left">Фото: <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a></p>
       <div class="actions">
-        <label class="btn">📷 Загрузить своё<input type="file" accept="image/*" id="img-file" hidden></label>
+        ${upload}
         ${card.image ? '<button class="btn danger" type="button" id="img-remove">Убрать картинку</button>' : ''}
       </div>
-      <div id="img-status"></div>` : `
-      <p>Картинки можно добавлять после входа в аккаунт.</p>
-      <div class="actions"><a class="btn primary" href="#/login">Войти</a></div>`;
+      <div id="img-status"></div>`;
 
     overlay.innerHTML = `
       <div class="dialog wide" role="dialog" aria-modal="true">
@@ -570,27 +599,23 @@
     };
     document.body.appendChild(overlay);
 
-    if (!user) {
-      return;
-    }
-
     const results = overlay.querySelector('#img-results');
     const status = overlay.querySelector('#img-status');
 
     const search = async query => {
       results.innerHTML = '<p class="muted">Ищем…</p>';
       try {
-        const photos = await Cloud.searchImages(query);
+        const photos = await searchImages(query);
         if (!photos.length) {
           results.innerHTML = '<p class="muted">Ничего не нашлось — попробуйте другое слово.</p>';
           return;
         }
         results.innerHTML = photos.map((photo, i) => `
-          <button class="img-option" type="button" data-i="${i}" title="${esc(photo.photographer || '')}">
-            <img src="${esc(photo.src)}" alt="${esc(photo.alt || '')}" loading="lazy">
+          <button class="img-option" type="button" data-i="${i}">
+            <img src="${esc(photo)}" alt="" loading="lazy">
           </button>`).join('');
         results.querySelectorAll('.img-option').forEach(button => {
-          button.onclick = () => choose(photos[button.dataset.i].src);
+          button.onclick = () => choose(photos[button.dataset.i]);
         });
       } catch (e) {
         console.error('Image search failed', e);
@@ -606,22 +631,25 @@
       }
     };
 
-    overlay.querySelector('#img-file').onchange = async event => {
-      const file = event.target.files[0];
-      if (!file) {
-        return;
-      }
-      status.className = 'muted';
-      status.textContent = 'Загружаем…';
-      try {
-        const blob = await compressImage(file);
-        choose(await Cloud.uploadImage(user.id, blob));
-      } catch (e) {
-        console.error('Image upload failed', e);
-        status.className = 'bad-text';
-        status.textContent = 'Не получилось загрузить фото. Попробуйте другое.';
-      }
-    };
+    const fileInput = overlay.querySelector('#img-file');
+    if (fileInput) {
+      fileInput.onchange = async event => {
+        const file = event.target.files[0];
+        if (!file) {
+          return;
+        }
+        status.className = 'muted';
+        status.textContent = 'Загружаем…';
+        try {
+          const blob = await compressImage(file);
+          choose(await Cloud.uploadImage(user.id, blob));
+        } catch (e) {
+          console.error('Image upload failed', e);
+          status.className = 'bad-text';
+          status.textContent = 'Не получилось загрузить фото. Попробуйте другое.';
+        }
+      };
+    }
 
     const remove = overlay.querySelector('#img-remove');
     if (remove) {

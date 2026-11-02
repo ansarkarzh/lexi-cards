@@ -85,11 +85,6 @@
       await check(client.from('sets').delete().in('id', ids));
     },
 
-    async searchImages(query) {
-      const data = await check(client.functions.invoke('image-search', { body: { query } }));
-      return data.photos;
-    },
-
     async uploadImage(userId, blob) {
       const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
       const path = `${userId}/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${extension}`;
