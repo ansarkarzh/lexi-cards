@@ -7,6 +7,7 @@
   const DEFAULT_SETTINGS = { direction: 'en-ru', autoSpeak: false, onlyUnlearned: false, voice: '', sounds: true };
   const CAN_SPEAK = 'speechSynthesis' in window;
   const MATCH_SIZE = 6;
+  const IMAGE_MAX_SIZE = 512;
   const SYNC_DELAY_MS = 1500;
   const SYNC_RETRY_MS = 15000;
   const REFRESHABLE_VIEWS = ['', 'set', 'account'];
@@ -76,6 +77,14 @@
     }
     save();
     scheduleSync(SYNC_DELAY_MS);
+    deleteCardImages(set.cards);
+  }
+
+  function deleteCardImages(cards) {
+    const urls = cards.map(card => card.image).filter(Boolean);
+    if (user && urls.length) {
+      Cloud.deleteImages(urls).catch(e => console.error('Image cleanup failed', e));
+    }
   }
 
   function clearLocalSets() {
@@ -378,8 +387,16 @@
     return `<button class="speak" type="button" data-speak="${esc(text)}" data-lang="${lang}" title="Озвучить">🔊</button>`;
   }
 
-  function termHtml(text, lang) {
-    return `<span>${esc(text)}</span>${speakButton(text, lang)}`;
+  function termHtml(text, lang, image) {
+    const term = `<span>${esc(text)}</span>${speakButton(text, lang)}`;
+    if (!image) {
+      return term;
+    }
+    return `<span class="with-img"><img class="term-img" src="${esc(image)}" alt=""><span>${term}</span></span>`;
+  }
+
+  function imageFor(card, lang) {
+    return lang === 'ru' ? card.image : '';
   }
 
   function levelDots(card) {
@@ -387,9 +404,14 @@
     return `<span class="dots" title="Уровень ${level} из ${C.MAX_LEVEL}">${'●'.repeat(level)}<span class="off">${'●'.repeat(C.MAX_LEVEL - level)}</span></span>`;
   }
 
-  function wordRow(card) {
+  function wordRow(card, editable) {
+    const picture = card.image ? `<img src="${esc(card.image)}" alt="" loading="lazy">` : '';
+    const thumb = editable
+      ? `<button class="thumb" type="button" data-image-card="${esc(card.id)}" title="Картинка">${picture || '🖼'}</button>`
+      : `<span class="thumb static">${picture}</span>`;
     return `
       <li>
+        ${thumb}
         <span class="w-en">${termHtml(card.en, 'en')}</span>
         <span class="w-ru">${esc(card.ru)}</span>
         ${levelDots(card)}
@@ -461,6 +483,152 @@
         overlay.querySelector('[data-result="yes"]').focus();
       }
     });
+  }
+
+  function setCardImage(setId, cardId, image) {
+    const set = findSet(setId);
+    const card = set && set.cards.find(other => other.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    const previous = card.image;
+    if (image) {
+      card.image = image;
+    } else {
+      delete card.image;
+    }
+    touch(set);
+    if (previous && previous !== image) {
+      deleteCardImages([{ image: previous }]);
+    }
+    if (location.hash === `#/set/${set.id}`) {
+      renderSet(set);
+    }
+  }
+
+  async function compressImage(file) {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, IMAGE_MAX_SIZE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    const toBlob = type => new Promise(resolve => canvas.toBlob(resolve, type, 0.8));
+    const webp = await toBlob('image/webp');
+    return webp && webp.type === 'image/webp' ? webp : toBlob('image/jpeg');
+  }
+
+  function openImagePicker(set, card) {
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+
+    const body = user ? `
+      <form class="write" id="img-search">
+        <input id="img-query" value="${esc(card.en)}" autocomplete="off" autocapitalize="off" placeholder="Что искать, по-английски">
+        <button class="btn primary">Найти</button>
+      </form>
+      <div class="img-grid" id="img-results"></div>
+      <p class="hint left">Фото: <a href="https://www.pexels.com" target="_blank" rel="noopener">Pexels</a></p>
+      <div class="actions">
+        <label class="btn">📷 Загрузить своё<input type="file" accept="image/*" id="img-file" hidden></label>
+        ${card.image ? '<button class="btn danger" type="button" id="img-remove">Убрать картинку</button>' : ''}
+      </div>
+      <div id="img-status"></div>` : `
+      <p>Картинки можно добавлять после входа в аккаунт.</p>
+      <div class="actions"><a class="btn primary" href="#/login">Войти</a></div>`;
+
+    overlay.innerHTML = `
+      <div class="dialog wide" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <b>Картинка для «${esc(card.en)}»</b>
+          <button class="close" type="button" id="img-close" title="Закрыть">✕</button>
+        </div>
+        ${body}
+      </div>`;
+
+    const previousKeyHandler = keyHandler;
+    const close = () => {
+      overlay.remove();
+      keyHandler = previousKeyHandler;
+    };
+    const choose = image => {
+      close();
+      setCardImage(set.id, card.id, image);
+    };
+
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay || event.target.id === 'img-close') {
+        close();
+      }
+    });
+    keyHandler = event => {
+      if (event.key === 'Escape') {
+        close();
+      }
+    };
+    document.body.appendChild(overlay);
+
+    if (!user) {
+      return;
+    }
+
+    const results = overlay.querySelector('#img-results');
+    const status = overlay.querySelector('#img-status');
+
+    const search = async query => {
+      results.innerHTML = '<p class="muted">Ищем…</p>';
+      try {
+        const photos = await Cloud.searchImages(query);
+        if (!photos.length) {
+          results.innerHTML = '<p class="muted">Ничего не нашлось — попробуйте другое слово.</p>';
+          return;
+        }
+        results.innerHTML = photos.map((photo, i) => `
+          <button class="img-option" type="button" data-i="${i}" title="${esc(photo.photographer || '')}">
+            <img src="${esc(photo.src)}" alt="${esc(photo.alt || '')}" loading="lazy">
+          </button>`).join('');
+        results.querySelectorAll('.img-option').forEach(button => {
+          button.onclick = () => choose(photos[button.dataset.i].src);
+        });
+      } catch (e) {
+        console.error('Image search failed', e);
+        results.innerHTML = '<p class="bad-text">Поиск не сработал. Попробуйте позже или загрузите своё фото.</p>';
+      }
+    };
+
+    overlay.querySelector('#img-search').onsubmit = event => {
+      event.preventDefault();
+      const query = overlay.querySelector('#img-query').value.trim();
+      if (query) {
+        search(query);
+      }
+    };
+
+    overlay.querySelector('#img-file').onchange = async event => {
+      const file = event.target.files[0];
+      if (!file) {
+        return;
+      }
+      status.className = 'muted';
+      status.textContent = 'Загружаем…';
+      try {
+        const blob = await compressImage(file);
+        choose(await Cloud.uploadImage(user.id, blob));
+      } catch (e) {
+        console.error('Image upload failed', e);
+        status.className = 'bad-text';
+        status.textContent = 'Не получилось загрузить фото. Попробуйте другое.';
+      }
+    };
+
+    const remove = overlay.querySelector('#img-remove');
+    if (remove) {
+      remove.onclick = () => choose(null);
+    }
+
+    search(card.en);
   }
 
   async function share(set) {
@@ -665,7 +833,7 @@
         ${total ? '<button class="btn" id="reset">↺ Сбросить прогресс</button>' : ''}
         <button class="btn danger" id="delete">Удалить</button>
       </div>
-      ${total ? `<h3>Слова</h3><ul class="words">${set.cards.map(wordRow).join('')}</ul>` : ''}`;
+      ${total ? `<h3>Слова</h3><ul class="words">${set.cards.map(card => wordRow(card, true)).join('')}</ul>` : ''}`;
 
     const onChange = (selector, apply) => {
       const element = $(selector);
@@ -690,6 +858,9 @@
     bind('#voice-test', () => speak(set.cards[0].en, 'en'));
 
     bind('#share', () => share(set));
+    app.querySelectorAll('[data-image-card]').forEach(button => {
+      button.onclick = () => openImagePicker(set, set.cards.find(card => card.id === button.dataset.imageCard));
+    });
     bind('#reset', async () => {
       if (!(await showDialog({ text: 'Сбросить прогресс по всем словам набора?', okLabel: 'Сбросить', danger: true }))) {
         return;
@@ -751,8 +922,10 @@
       const title = $('#edit-title').value.trim() || 'Без названия';
       let target = set;
       if (target) {
+        const merged = C.mergeCards(target.cards, cards);
+        deleteCardImages(target.cards.filter(card => !merged.some(other => other.id === card.id)));
         target.title = title;
-        target.cards = C.mergeCards(target.cards, cards);
+        target.cards = merged;
       } else {
         target = makeSet(title, cards);
         store.sets.push(target);
@@ -784,7 +957,7 @@
         <button class="btn primary" id="add">Добавить в мои наборы</button>
         <a class="btn" href="#/">Отмена</a>
       </div>
-      <ul class="words">${shared.cards.map(wordRow).join('')}</ul>`;
+      <ul class="words">${shared.cards.map(card => wordRow(card)).join('')}</ul>`;
 
     bind('#add', () => {
       const set = makeSet(shared.title || 'Без названия', shared.cards);
@@ -858,8 +1031,8 @@
       ui.stage.innerHTML = `
         <div class="flip" id="flip">
           <div class="flip-inner">
-            <div class="face front">${termHtml(sides.prompt, sides.promptLang)}</div>
-            <div class="face back">${termHtml(sides.answer, sides.answerLang)}</div>
+            <div class="face front">${termHtml(sides.prompt, sides.promptLang, imageFor(card, sides.promptLang))}</div>
+            <div class="face back">${termHtml(sides.answer, sides.answerLang, imageFor(card, sides.answerLang))}</div>
           </div>
         </div>
         <div class="row">
@@ -955,7 +1128,7 @@
       ui.stage.innerHTML = `
         <div class="prompt">
           <div class="muted">${label}</div>
-          <div class="term">${termHtml(question.prompt, question.promptLang)}</div>
+          <div class="term">${termHtml(question.prompt, question.promptLang, imageFor(question.card, question.promptLang))}</div>
         </div>
         <div id="answer"></div>
         <div id="feedback" class="feedback"></div>`;
@@ -971,6 +1144,14 @@
       if (store.settings.autoSpeak && question.promptLang === 'en') {
         speak(question.prompt, 'en');
       }
+    }
+
+    function answerImage(question, text) {
+      if (question.answerLang !== 'ru') {
+        return '';
+      }
+      const card = set.cards.find(other => other.ru === text);
+      return card ? card.image : '';
     }
 
     function commit(question, ok) {
@@ -1022,11 +1203,16 @@
       };
     }
 
+    function optionImage(question, option) {
+      const image = answerImage(question, option);
+      return image ? `<img class="option-img" src="${esc(image)}" alt="">` : '';
+    }
+
     function askChoice(question) {
       const box = $('#answer');
       box.className = 'options';
       box.innerHTML = question.options.map((option, i) =>
-        `<button class="option" type="button"><span class="key">${i + 1}</span><span>${esc(option)}</span></button>`).join('');
+        `<button class="option" type="button"><span class="key">${i + 1}</span>${optionImage(question, option)}<span>${esc(option)}</span></button>`).join('');
 
       const buttons = [...box.children];
       const pick = picked => {
@@ -1093,7 +1279,7 @@
     }
 
     function askTrueFalse(question) {
-      $('.prompt').insertAdjacentHTML('beforeend', `<div class="tf-shown">${termHtml(question.shown, question.answerLang)}</div>`);
+      $('.prompt').insertAdjacentHTML('beforeend', `<div class="tf-shown">${termHtml(question.shown, question.answerLang, answerImage(question, question.shown))}</div>`);
       $('#answer').innerHTML = `
         <div class="row">
           <button class="btn bad" type="button" id="tf-no">← Неверно</button>
@@ -1125,7 +1311,7 @@
         <div class="result">
           <h2>${missed.length ? 'Готово!' : 'Без единой ошибки! 🎉'}</h2>
           <p class="score">С первого раза: <b>${clean}</b> из ${session.total}</p>
-          ${missed.length ? `<h3>Были ошибки</h3><ul class="words">${missed.map(wordRow).join('')}</ul>` : ''}
+          ${missed.length ? `<h3>Были ошибки</h3><ul class="words">${missed.map(card => wordRow(card)).join('')}</ul>` : ''}
           <div class="row">
             ${missed.length ? '<button class="btn primary" id="again-missed">Повторить ошибки</button>' : ''}
             <button class="btn" id="again">Ещё раз</button>
@@ -1150,7 +1336,7 @@
       return;
     }
 
-    const tiles = C.shuffle(picked.flatMap(card => [{ id: card.id, text: card.en }, { id: card.id, text: card.ru }]));
+    const tiles = C.shuffle(picked.flatMap(card => [{ id: card.id, text: card.en }, { id: card.id, text: card.ru, image: card.image }]));
     const start = Date.now();
     let penalty = 0;
     let left = picked.length;
@@ -1158,7 +1344,7 @@
 
     ui.stage.innerHTML = `
       <p class="hint">Нажмите на слово, а затем на его перевод. Ошибка — плюс секунда.</p>
-      <div class="match-grid">${tiles.map(tile => `<button class="tile" type="button">${esc(tile.text)}</button>`).join('')}</div>`;
+      <div class="match-grid">${tiles.map(tile => `<button class="tile" type="button">${tile.image ? `<img class="tile-img" src="${esc(tile.image)}" alt="">` : ''}<span>${esc(tile.text)}</span></button>`).join('')}</div>`;
 
     const buttons = [...ui.stage.querySelectorAll('.tile')];
     const elapsed = () => (Date.now() - start + penalty) / 1000;

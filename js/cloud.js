@@ -2,6 +2,7 @@
   'use strict';
 
   const LOGIN_DOMAIN = 'lexi-cards.local';
+  const IMAGE_BUCKET = 'images';
   const config = window.LEXI_CONFIG || {};
   const enabled = Boolean(config.supabaseUrl && config.supabaseKey && window.supabase);
   const client = enabled ? window.supabase.createClient(config.supabaseUrl, config.supabaseKey) : null;
@@ -9,6 +10,11 @@
   // Supabase identifies users by email, so a login is mapped to an address that never receives mail.
   function loginEmail(login) {
     return `${login.toLowerCase()}@${LOGIN_DOMAIN}`;
+  }
+
+  function imagePath(url) {
+    const prefix = `${config.supabaseUrl}/storage/v1/object/public/${IMAGE_BUCKET}/`;
+    return url && url.startsWith(prefix) ? url.slice(prefix.length) : null;
   }
 
   async function check(request) {
@@ -77,6 +83,26 @@
 
     async deleteSets(ids) {
       await check(client.from('sets').delete().in('id', ids));
+    },
+
+    async searchImages(query) {
+      const data = await check(client.functions.invoke('image-search', { body: { query } }));
+      return data.photos;
+    },
+
+    async uploadImage(userId, blob) {
+      const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
+      const path = `${userId}/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${extension}`;
+      const bucket = client.storage.from(IMAGE_BUCKET);
+      await check(bucket.upload(path, blob, { contentType: blob.type, cacheControl: '31536000' }));
+      return bucket.getPublicUrl(path).data.publicUrl;
+    },
+
+    async deleteImages(urls) {
+      const paths = urls.map(imagePath).filter(Boolean);
+      if (paths.length) {
+        await check(client.storage.from(IMAGE_BUCKET).remove(paths));
+      }
     },
   };
 })();
