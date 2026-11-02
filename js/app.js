@@ -444,7 +444,7 @@
 
     let account = '';
     if (user) {
-      account = `<a class="btn" href="#/account" title="${esc(user.email || '')}">☁ Аккаунт</a>`;
+      account = `<a class="btn" href="#/account" title="${esc(Cloud.loginOf(user))}">☁ ${esc(Cloud.loginOf(user))}</a>`;
     } else if (Cloud.enabled) {
       account = '<a class="btn" href="#/login">Войти</a>';
     }
@@ -460,35 +460,54 @@
       ${tiles ? `<div class="grid">${tiles}</div>` : empty}`;
   }
 
+  function authErrorText(error) {
+    const texts = {
+      invalid_credentials: 'Неверный логин или пароль',
+      user_already_exists: 'Такой логин уже занят',
+      weak_password: 'Слишком простой пароль: нужно минимум 6 символов',
+      over_request_rate_limit: 'Слишком много попыток, подождите минуту',
+      signup_disabled: 'Регистрация новых аккаунтов выключена в настройках Supabase',
+      email_not_confirmed: 'В Supabase включено подтверждение email — выключите его',
+      confirmation_required: 'В Supabase включено подтверждение email — выключите его',
+    };
+    return texts[error.code] || texts[error.message] || `Ошибка: ${error.message || error}`;
+  }
+
   function renderLogin() {
     app.innerHTML = `
       <header class="top"><a class="back" href="#/">← Назад</a></header>
       <h2>Вход</h2>
-      <p class="muted">Введите email — пришлём ссылку для входа, пароль не нужен. Наборы из этого браузера сохранятся в ваш аккаунт.</p>
+      <p class="muted">Впервые здесь — придумайте логин и пароль и нажмите «Создать аккаунт». Наборы из этого браузера сохранятся в аккаунт. Восстановить забытый пароль нельзя.</p>
       <form id="login-form" class="edit">
-        <input id="login-email" type="email" required autocomplete="email" placeholder="you@example.com">
-        <div><button class="btn primary">Получить ссылку</button></div>
+        <input id="login-name" required autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="Логин"
+          pattern="[A-Za-z0-9._\-]{3,32}" title="От 3 до 32 латинских букв, цифр и символов . _ -">
+        <input id="login-password" type="password" required minlength="6" autocomplete="current-password" placeholder="Пароль (минимум 6 символов)">
+        <div class="actions">
+          <button class="btn primary" value="in">Войти</button>
+          <button class="btn" value="up">Создать аккаунт</button>
+        </div>
         <div id="login-info"></div>
       </form>`;
 
-    const input = $('#login-email');
     const info = $('#login-info');
-    input.focus();
+    $('#login-name').focus();
 
     $('#login-form').onsubmit = async event => {
       event.preventDefault();
-      const button = $('#login-form button');
-      button.disabled = true;
+      const buttons = [...app.querySelectorAll('#login-form button')];
+      const login = $('#login-name').value.trim();
+      const password = $('#login-password').value;
+      const isSignUp = event.submitter && event.submitter.value === 'up';
+
+      buttons.forEach(button => { button.disabled = true; });
       info.className = 'muted';
-      info.textContent = 'Отправляем…';
+      info.textContent = isSignUp ? 'Создаём аккаунт…' : 'Входим…';
       try {
-        await Cloud.signIn(input.value.trim());
-        info.className = 'good-text';
-        info.textContent = 'Готово! Откройте ссылку из письма в этом же браузере.';
+        await (isSignUp ? Cloud.signUp(login, password) : Cloud.signIn(login, password));
       } catch (e) {
         info.className = 'bad-text';
-        info.textContent = `Не получилось отправить письмо: ${e.message || e}`;
-        button.disabled = false;
+        info.textContent = authErrorText(e);
+        buttons.forEach(button => { button.disabled = false; });
       }
     };
   }
@@ -497,7 +516,7 @@
     app.innerHTML = `
       <header class="top"><a class="back" href="#/">← Все наборы</a></header>
       <h2>Аккаунт</h2>
-      <p>${esc(user.email || '')}</p>
+      <p>Логин: <b>${esc(Cloud.loginOf(user))}</b></p>
       <p class="muted">${esc(footer.textContent)}</p>
       <div class="actions">
         <button class="btn" id="sync-now">↻ Синхронизировать сейчас</button>

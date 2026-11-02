@@ -1,11 +1,15 @@
 (function () {
   'use strict';
 
+  const LOGIN_DOMAIN = 'lexi-cards.local';
   const config = window.LEXI_CONFIG || {};
   const enabled = Boolean(config.supabaseUrl && config.supabaseKey && window.supabase);
-  const client = enabled
-    ? window.supabase.createClient(config.supabaseUrl, config.supabaseKey, { auth: { flowType: 'pkce' } })
-    : null;
+  const client = enabled ? window.supabase.createClient(config.supabaseUrl, config.supabaseKey) : null;
+
+  // Supabase identifies users by email, so a login is mapped to an address that never receives mail.
+  function loginEmail(login) {
+    return `${login.toLowerCase()}@${LOGIN_DOMAIN}`;
+  }
 
   async function check(request) {
     const { data, error } = await request;
@@ -43,11 +47,19 @@
       });
     },
 
-    async signIn(email) {
-      await check(client.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: location.origin + location.pathname },
-      }));
+    loginOf(user) {
+      return (user.email || '').replace(`@${LOGIN_DOMAIN}`, '');
+    },
+
+    async signIn(login, password) {
+      await check(client.auth.signInWithPassword({ email: loginEmail(login), password }));
+    },
+
+    async signUp(login, password) {
+      const data = await check(client.auth.signUp({ email: loginEmail(login), password }));
+      if (!data.session) {
+        throw new Error('confirmation_required');
+      }
     },
 
     async signOut() {
