@@ -4,7 +4,7 @@
   const C = window.Core;
   const Cloud = window.LexiCloud || { enabled: false };
   const STORAGE_KEY = 'lexi.v1';
-  const DEFAULT_SETTINGS = { direction: 'en-ru', autoSpeak: false, onlyUnlearned: false, voice: '' };
+  const DEFAULT_SETTINGS = { direction: 'en-ru', autoSpeak: false, onlyUnlearned: false, voice: '', sounds: true };
   const CAN_SPEAK = 'speechSynthesis' in window;
   const MATCH_SIZE = 6;
   const SYNC_DELAY_MS = 1500;
@@ -37,6 +37,7 @@
   let syncing = false;
   let syncAgain = false;
   let syncStatus = 'idle';
+  let audioContext = null;
 
   function load() {
     let data = null;
@@ -316,6 +317,38 @@
     speechSynthesis.speak(utterance);
   }
 
+  function playFeedback(ok) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!store.settings.sounds || !AudioContextClass) {
+      return;
+    }
+
+    audioContext = audioContext || new AudioContextClass();
+    if (audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+
+    const notes = ok ? [[660, 0], [880, 0.09]] : [[220, 0], [165, 0.13]];
+    const duration = ok ? 0.18 : 0.22;
+    const now = audioContext.currentTime;
+
+    notes.forEach(([frequency, offset]) => {
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const start = now + offset;
+
+      oscillator.type = ok ? 'sine' : 'triangle';
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.25, start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(start);
+      oscillator.stop(start + duration + 0.02);
+    });
+  }
+
   function loadVoices() {
     voices = C.rankVoices(speechSynthesis.getVoices());
     const select = $('#opt-voice');
@@ -559,6 +592,7 @@
       <div class="options-row">
         <label>Направление <select id="opt-dir">${directionOptions}</select></label>
         <label><input type="checkbox" id="opt-only"${settings.onlyUnlearned ? ' checked' : ''}> Только невыученные</label>
+        <label><input type="checkbox" id="opt-sounds"${settings.sounds ? ' checked' : ''}> Звуки ответов</label>
         ${CAN_SPEAK ? `<label><input type="checkbox" id="opt-speak"${settings.autoSpeak ? ' checked' : ''}> Озвучивать английский</label>` : ''}
       </div>
       ${CAN_SPEAK ? `
@@ -594,6 +628,10 @@
     };
     onChange('#opt-dir', el => { settings.direction = el.value; });
     onChange('#opt-only', el => { settings.onlyUnlearned = el.checked; });
+    onChange('#opt-sounds', el => {
+      settings.sounds = el.checked;
+      playFeedback(true);
+    });
     onChange('#opt-speak', el => { settings.autoSpeak = el.checked; });
     onChange('#opt-voice', el => {
       settings.voice = el.value;
@@ -892,6 +930,7 @@
 
     function resolve(question, ok, extra = {}) {
       locked = true;
+      playFeedback(ok);
 
       if (ok && !extra.typo) {
         commit(question, true);
@@ -1100,9 +1139,11 @@
             el.disabled = true;
           });
           left--;
+          playFeedback(true);
           ui.pbar.style.width = `${percent(picked.length - left, picked.length)}%`;
         } else {
           penalty += 1000;
+          playFeedback(false);
           [first, button].forEach(el => {
             el.classList.add('miss');
             later(() => el.classList.remove('miss'), 400);
