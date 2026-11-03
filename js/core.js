@@ -144,6 +144,20 @@
     return (card.level || 0) >= LEARNED_LEVEL;
   }
 
+  function levelStats(cards) {
+    const stats = { fresh: 0, learning: 0, learned: 0 };
+    cards.forEach(card => {
+      if (isLearned(card)) {
+        stats.learned++;
+      } else if ((card.level || 0) > 0) {
+        stats.learning++;
+      } else {
+        stats.fresh++;
+      }
+    });
+    return stats;
+  }
+
   function resolveDirection(direction) {
     if (direction !== 'mix') {
       return direction;
@@ -201,7 +215,7 @@
       stage: mode === 'learn' && (card.level || 0) >= 2 ? 1 : 0,
       misses: 0,
     }));
-    return { mode, items, queue: items.slice(), total: items.length, finished: 0 };
+    return { mode, items, queue: items.slice(), total: items.length, finished: 0, correct: 0, wrong: 0 };
   }
 
   function currentType(session) {
@@ -215,17 +229,32 @@
     const item = session.queue.shift();
 
     if (!ok) {
+      session.wrong++;
       item.misses++;
       session.queue.splice(Math.min(REQUEUE_GAP, session.queue.length), 0, item);
       return;
     }
 
+    session.correct++;
     item.stage++;
     if (item.stage >= stagesFor(session.mode).length) {
       session.finished++;
       return;
     }
     session.queue.push(item);
+  }
+
+  function sessionStats(session) {
+    const steps = stagesFor(session.mode).length;
+    const stats = { fresh: 0, learning: 0, done: session.finished, correct: session.correct, wrong: session.wrong };
+    session.items.forEach(item => {
+      if (item.stage === 0) {
+        stats.fresh++;
+      } else if (item.stage < steps) {
+        stats.learning++;
+      }
+    });
+    return stats;
   }
 
   function sessionProgress(session) {
@@ -295,6 +324,8 @@
     checkAnswer,
     grade,
     isLearned,
+    levelStats,
+    sessionStats,
     sides,
     buildQuestion,
     createSession,

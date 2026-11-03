@@ -98,7 +98,17 @@ a { color: var(--accent); text-decoration: none; }
 
 .bar, .progress { height: 6px; overflow: hidden; background: var(--border); border-radius: 3px; }
 .bar { margin-top: 10px; }
-.bar > div { height: 100%; background: var(--good); }
+.bar { display: flex; }
+.bar > div { height: 100%; }
+.bar .learned { background: var(--good); }
+.bar .learning { background: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--muted); font-size: 14px; }
+.dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: var(--border); border-radius: 50%; }
+.dot.learned { background: var(--good); }
+.dot.learning { background: var(--accent); }
+.stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; margin: -14px 0 16px; color: var(--muted); font-size: 14px; }
+.stats:empty { display: none; }
+.learning-text { color: var(--accent); font-weight: 700; }
 .progress { margin-bottom: 24px; }
 .progress > div { width: 0; height: 100%; background: var(--accent); transition: width 0.3s; }
 

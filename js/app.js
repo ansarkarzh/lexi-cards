@@ -295,6 +295,26 @@
     return many;
   }
 
+  function levelBar(cards) {
+    const stats = C.levelStats(cards);
+    const total = cards.length;
+    return `
+      <div class="bar">
+        <div class="learned" style="width:${percent(stats.learned, total)}%"></div>
+        <div class="learning" style="width:${percent(stats.learning, total)}%"></div>
+      </div>`;
+  }
+
+  function levelLegend(cards) {
+    const stats = C.levelStats(cards);
+    return `
+      <div class="legend">
+        <span><i class="dot learned"></i>Выучено ${stats.learned}</span>
+        <span><i class="dot learning"></i>Изучаю ${stats.learning}</span>
+        <span><i class="dot"></i>Не изучено ${stats.fresh}</span>
+      </div>`;
+  }
+
   function wordsCount(n) {
     return `${n} ${plural(n, 'слово', 'слова', 'слов')}`;
   }
@@ -709,7 +729,7 @@
         <a class="set-tile" href="#/set/${set.id}">
           <div class="set-title">${esc(set.title)}</div>
           <div class="muted">${wordsCount(set.cards.length)} · выучено ${pct}%</div>
-          <div class="bar"><div style="width:${pct}%"></div></div>
+          ${levelBar(set.cards)}
         </a>`;
     }).join('');
 
@@ -821,7 +841,6 @@
   function renderSet(set) {
     const settings = store.settings;
     const total = set.cards.length;
-    const learned = set.cards.filter(C.isLearned).length;
     const record = set.bestMatch ? ` · рекорд подбора ${set.bestMatch.toFixed(1)} с` : '';
 
     const modes = MODES.map(mode => `
@@ -851,8 +870,9 @@
       <header class="top"><a class="back" href="#/">← Все наборы</a></header>
       <section>
         <h2>${esc(set.title)}</h2>
-        <div class="muted">${wordsCount(total)} · выучено ${learned} из ${total}${record}</div>
-        <div class="bar"><div style="width:${percent(learned, total)}%"></div></div>
+        <div class="muted">${wordsCount(total)}${record}</div>
+        ${levelBar(set.cards)}
+        ${total ? levelLegend(set.cards) : ''}
       </section>
       ${total ? study : '<p class="empty">В наборе пока нет слов — добавьте их в редакторе.</p>'}
       <div class="actions">
@@ -1019,9 +1039,10 @@
         <div class="counter" id="counter"></div>
       </header>
       <div class="progress"><div id="pbar"></div></div>
+      <div class="stats" id="stats"></div>
       <main id="stage"></main>`;
 
-    const ui = { stage: $('#stage'), counter: $('#counter'), pbar: $('#pbar') };
+    const ui = { stage: $('#stage'), counter: $('#counter'), pbar: $('#pbar'), stats: $('#stats') };
     if (mode.id === 'cards') {
       runCards(set, cards, ui);
     } else if (mode.id === 'match') {
@@ -1141,6 +1162,7 @@
     function next() {
       clearTimers();
       setProgress(ui, session.finished, session.total, C.sessionProgress(session));
+      renderSessionStats();
       if (!session.queue.length) {
         finish();
         return;
@@ -1180,6 +1202,21 @@
       }
       const card = set.cards.find(other => other.ru === text);
       return card ? card.image : '';
+    }
+
+    function renderSessionStats() {
+      const stats = C.sessionStats(session);
+      if (mode === 'learn') {
+        ui.stats.innerHTML = `
+          <span>Не изучено <b>${stats.fresh}</b></span>
+          <span class="learning-text">Изучаю <b>${stats.learning}</b></span>
+          <span class="good-text">Выучено <b>${stats.done}</b></span>`;
+        return;
+      }
+      ui.stats.innerHTML = `
+        <span>Пройдено <b>${stats.done}</b> из ${session.total}</span>
+        <span class="good-text">✓ ${stats.correct}</span>
+        <span class="bad-text">✗ ${stats.wrong}</span>`;
     }
 
     function commit(question, ok) {
