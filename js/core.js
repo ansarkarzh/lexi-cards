@@ -6,6 +6,9 @@
   const REQUEUE_GAP = 3;
   const MIX_TYPES = ['choice', 'write', 'tf'];
   const SEPARATORS = [/\t+/, /\s+[-–—=:]\s+/, /[–—=]/];
+  const FILLER_WORDS = new Set(['будет', 'будут', 'быть', 'это', 'ли', 'же', 'бы', 'то', 'вот', 'и', 'a', 'an', 'the', 'to', 'be', 'will', 'is', 'are']);
+  const WORD_PREFIX_MIN = 4;
+  const WORD_PREFIX_SHARE = 0.6;
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -120,19 +123,67 @@
     return length >= 6 ? 1 : 0;
   }
 
-  function checkAnswer(input, expected) {
+  function commonPrefix(a, b) {
+    let i = 0;
+    while (i < a.length && a[i] === b[i]) {
+      i++;
+    }
+    return i;
+  }
+
+  // Russian words change endings with case and tense, so a long shared beginning counts as the same word.
+  function sameWord(a, b) {
+    if (levenshtein(a, b) <= typoLimit(Math.max(a.length, b.length))) {
+      return true;
+    }
+    const prefix = commonPrefix(a, b);
+    return prefix >= WORD_PREFIX_MIN && prefix / Math.max(a.length, b.length) >= WORD_PREFIX_SHARE;
+  }
+
+  function contentWords(text) {
+    return text.split(' ').filter(word => !FILLER_WORDS.has(word));
+  }
+
+  function sameWords(answer, variant) {
+    const words = contentWords(answer);
+    const rest = contentWords(variant);
+    if (!words.length || words.length !== rest.length) {
+      return false;
+    }
+
+    return words.every(word => {
+      const index = rest.findIndex(other => sameWord(word, other));
+      if (index < 0) {
+        return false;
+      }
+      rest.splice(index, 1);
+      return true;
+    });
+  }
+
+  function checkAnswer(input, expected, accepted = []) {
     const answer = stripArticles(normalize(input));
     if (!answer) {
       return 'wrong';
     }
 
-    const variants = answerVariants(expected);
+    const variants = [...answerVariants(expected), ...accepted];
     if (variants.includes(answer)) {
       return 'correct';
     }
+    if (variants.some(variant => levenshtein(answer, variant) <= typoLimit(variant.length))) {
+      return 'typo';
+    }
+    return variants.some(variant => sameWords(answer, variant)) ? 'close' : 'wrong';
+  }
 
-    const isTypo = variants.some(variant => levenshtein(answer, variant) <= typoLimit(variant.length));
-    return isTypo ? 'typo' : 'wrong';
+  function acceptAnswer(card, lang, input) {
+    const answer = stripArticles(normalize(input));
+    const accepted = card.accepted || {};
+    const list = accepted[lang] || [];
+    if (answer && !list.includes(answer)) {
+      card.accepted = { ...accepted, [lang]: [...list, answer] };
+    }
   }
 
   function grade(card, ok) {
@@ -309,6 +360,7 @@
     mergeCards,
     normalize,
     checkAnswer,
+    acceptAnswer,
     grade,
     isLearned,
     levelStats,

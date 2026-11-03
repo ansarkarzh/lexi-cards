@@ -7,6 +7,7 @@
   const DEFAULT_SETTINGS = { direction: 'en-ru', autoSpeak: false, onlyUnlearned: false, voice: '', sounds: true };
   const CAN_SPEAK = 'speechSynthesis' in window;
   const MATCH_SIZE = 6;
+  const ANSWER_NOTES = { typo: '✓ Засчитано, но с опечаткой', close: '✓ Засчитано, в карточке немного иначе' };
   const IMAGE_MAX_SIZE = 512;
   const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
   const SYNC_DELAY_MS = 1500;
@@ -1231,7 +1232,7 @@
       locked = true;
       playFeedback(ok);
 
-      if (ok && !extra.typo) {
+      if (ok && !extra.note) {
         commit(question, true);
         $('#feedback').innerHTML = '<div class="good-text">✓ Верно!</div>';
         keyHandler = event => {
@@ -1244,7 +1245,7 @@
         return;
       }
 
-      const title = ok ? '✓ Засчитано, но с опечаткой' : '✗ Неверно';
+      const title = ok ? extra.note : '✗ Неверно';
       $('#feedback').innerHTML = `
         <div class="panel ${ok ? 'good' : 'bad'}">
           <div class="${ok ? 'good-text' : 'bad-text'}">${title}</div>
@@ -1261,7 +1262,10 @@
         next();
       };
       bind('#continue', () => proceed(ok));
-      bind('#override', () => proceed(true));
+      bind('#override', () => {
+        C.acceptAnswer(question.card, question.answerLang, extra.yours);
+        proceed(true);
+      });
       keyHandler = event => {
         if (isContinueKey(event)) {
           event.preventDefault();
@@ -1329,11 +1333,12 @@
         }
 
         input.disabled = true;
-        const result = C.checkAnswer(value, question.answer);
+        const accepted = (question.card.accepted || {})[question.answerLang];
+        const result = C.checkAnswer(value, question.answer, accepted);
         if (result === 'wrong') {
           resolve(question, false, { yours: value, canOverride: true });
         } else {
-          resolve(question, true, { typo: result === 'typo' });
+          resolve(question, true, { note: ANSWER_NOTES[result] });
         }
       };
 

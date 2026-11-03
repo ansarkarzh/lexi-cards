@@ -48,6 +48,25 @@ test('checkAnswer tolerates small typos only in long words', () => {
   assert.strictEqual(C.checkAnswer('cat', 'dog'), 'wrong');
 });
 
+test('checkAnswer matches phrases word by word ignoring endings and filler words', () => {
+  assert.strictEqual(C.checkAnswer('что если...?', 'Что будет, если...?'), 'close');
+  assert.strictEqual(C.checkAnswer('будущей стоимости', 'Будущая стоимость'), 'close');
+  assert.strictEqual(C.checkAnswer('стоимость будущая', 'Будущая стоимость'), 'close');
+  assert.strictEqual(C.checkAnswer('знать', 'не знать'), 'wrong');
+  assert.strictEqual(C.checkAnswer('кровь', 'кровать'), 'wrong');
+  assert.strictEqual(C.checkAnswer('будущая', 'Будущая стоимость'), 'wrong');
+});
+
+test('acceptAnswer remembers an overridden answer per language', () => {
+  const card = { en: 'What if...?', ru: 'Что будет, если...?' };
+  assert.strictEqual(C.checkAnswer('а вдруг', card.ru), 'wrong');
+
+  C.acceptAnswer(card, 'ru', 'А вдруг!');
+  C.acceptAnswer(card, 'ru', 'а вдруг');
+  assert.deepStrictEqual(card.accepted, { ru: ['а вдруг'] });
+  assert.strictEqual(C.checkAnswer('а вдруг', card.ru, card.accepted.ru), 'correct');
+});
+
 test('grade raises level on success and drops it on mistake', () => {
   const card = { level: 0 };
   C.grade(card, true);
