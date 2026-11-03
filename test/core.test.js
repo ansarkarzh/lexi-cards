@@ -51,13 +51,13 @@ test('checkAnswer tolerates small typos only in long words', () => {
 test('grade raises level on success and drops it on mistake', () => {
   const card = { level: 0 };
   C.grade(card, true);
+  assert.ok(!C.isLearned(card));
   C.grade(card, true);
-  C.grade(card, true);
-  assert.strictEqual(card.level, 3);
+  assert.strictEqual(card.level, 2);
   assert.ok(C.isLearned(card));
 
   C.grade(card, false);
-  assert.strictEqual(card.level, 1);
+  assert.strictEqual(card.level, 0);
   assert.ok(!C.isLearned(card));
 });
 
@@ -143,19 +143,12 @@ test('mix session asks random quiz types and finishes each card after one correc
 
 test('levelStats splits cards into fresh, learning and learned', () => {
   const cards = [{ level: 0 }, {}, { level: 1 }, { level: 2 }, { level: 3 }, { level: 5 }];
-  assert.deepStrictEqual(C.levelStats(cards), { fresh: 2, learning: 2, learned: 2 });
+  assert.deepStrictEqual(C.levelStats(cards), { fresh: 2, learning: 1, learned: 3 });
 });
 
-test('sessionStats tracks stages and answer tallies during learn', () => {
-  const cards = [{ id: '1', en: 'a', ru: 'б', level: 0 }, { id: '2', en: 'c', ru: 'д', level: 0 }];
+test('learn session resumes at writing for words already answered in choice', () => {
+  const cards = [{ id: '1', en: 'a', ru: 'б', level: 1 }, { id: '2', en: 'c', ru: 'д', level: 0 }];
   const session = C.createSession(cards, 'learn');
-
-  C.submit(session, true);
-  C.submit(session, false);
-  assert.deepStrictEqual(C.sessionStats(session), { fresh: 1, learning: 1, done: 0, correct: 1, wrong: 1 });
-
-  while (session.queue.length) {
-    C.submit(session, true);
-  }
-  assert.deepStrictEqual(C.sessionStats(session), { fresh: 0, learning: 0, done: 2, correct: 4, wrong: 1 });
+  const stages = Object.fromEntries(session.items.map(item => [item.card.id, item.stage]));
+  assert.deepStrictEqual(stages, { 1: 1, 2: 0 });
 });

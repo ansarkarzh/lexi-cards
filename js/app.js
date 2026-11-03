@@ -1161,7 +1161,6 @@
 
     function next() {
       clearTimers();
-      setProgress(ui, session.finished, session.total, C.sessionProgress(session));
       renderSessionStats();
       if (!session.queue.length) {
         finish();
@@ -1205,18 +1204,21 @@
     }
 
     function renderSessionStats() {
-      const stats = C.sessionStats(session);
       if (mode === 'learn') {
+        const stats = C.levelStats(session.items.map(item => item.card));
+        setProgress(ui, stats.learned, session.total, (stats.learned + stats.learning / 2) / session.total);
         ui.stats.innerHTML = `
           <span>Не изучено <b>${stats.fresh}</b></span>
           <span class="learning-text">Изучаю <b>${stats.learning}</b></span>
-          <span class="good-text">Выучено <b>${stats.done}</b></span>`;
+          <span class="good-text">Выучено <b>${stats.learned}</b></span>`;
         return;
       }
+
+      setProgress(ui, session.finished, session.total, C.sessionProgress(session));
       ui.stats.innerHTML = `
-        <span>Пройдено <b>${stats.done}</b> из ${session.total}</span>
-        <span class="good-text">✓ ${stats.correct}</span>
-        <span class="bad-text">✗ ${stats.wrong}</span>`;
+        <span>Пройдено <b>${session.finished}</b> из ${session.total}</span>
+        <span class="good-text">✓ ${session.correct}</span>
+        <span class="bad-text">✗ ${session.wrong}</span>`;
     }
 
     function commit(question, ok) {

@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const LEARNED_LEVEL = 3;
+  const LEARNED_LEVEL = 2;
   const MAX_LEVEL = 5;
   const REQUEUE_GAP = 3;
   const MIX_TYPES = ['choice', 'write', 'tf'];
@@ -212,7 +212,7 @@
   function createSession(cards, mode) {
     const items = shuffle(cards).map(card => ({
       card,
-      stage: mode === 'learn' && (card.level || 0) >= 2 ? 1 : 0,
+      stage: mode === 'learn' && (card.level || 0) >= 1 ? 1 : 0,
       misses: 0,
     }));
     return { mode, items, queue: items.slice(), total: items.length, finished: 0, correct: 0, wrong: 0 };
@@ -242,19 +242,6 @@
       return;
     }
     session.queue.push(item);
-  }
-
-  function sessionStats(session) {
-    const steps = stagesFor(session.mode).length;
-    const stats = { fresh: 0, learning: 0, done: session.finished, correct: session.correct, wrong: session.wrong };
-    session.items.forEach(item => {
-      if (item.stage === 0) {
-        stats.fresh++;
-      } else if (item.stage < steps) {
-        stats.learning++;
-      }
-    });
-    return stats;
   }
 
   function sessionProgress(session) {
@@ -325,7 +312,6 @@
     grade,
     isLearned,
     levelStats,
-    sessionStats,
     sides,
     buildQuestion,
     createSession,
